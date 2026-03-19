@@ -1,0 +1,292 @@
+import pygame
+import random
+import sys
+import os
+
+# 初始化
+pygame.init()
+
+# 屏幕设置
+SCREEN_WIDTH = 800
+SCREEN_HEIGHT = 600
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+pygame.display.set_caption("恐龙快打 - 简易版")
+clock = pygame.time.Clock()
+
+# 颜色定义
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+GREEN = (0, 200, 0)
+BROWN = (139, 69, 19)
+RED = (255, 0, 0)
+BLUE = (0, 120, 255)
+
+# 玩家类
+class Player:
+    def __init__(self, x, y):
+        self.rect = pygame.Rect(x, y, 50, 80)
+        self.color = BLUE
+        self.speed = 5
+        self.jump_power = 15
+        self.velocity_y = 0
+        self.on_ground = True
+        self.health = 100
+        self.score = 0
+        self.is_attacking = False
+        self.attack_timer = 0
+        
+    def move(self, keys, platforms):
+        # 水平移动
+        if keys[pygame.K_LEFT]:
+            self.rect.x -= self.speed
+        if keys[pygame.K_RIGHT]:
+            self.rect.x += self.speed
+            
+        # 跳跃
+        if keys[pygame.K_UP] and self.on_ground:
+            self.velocity_y = -self.jump_power
+            self.on_ground = False
+            
+        # 攻击
+        if keys[pygame.K_SPACE] and not self.is_attacking:
+            self.is_attacking = True
+            self.attack_timer = 10
+            
+        # 更新攻击计时器
+        if self.is_attacking:
+            self.attack_timer -= 1
+            if self.attack_timer <= 0:
+                self.is_attacking = False
+        
+        # 重力
+        self.velocity_y += 1
+        self.rect.y += self.velocity_y
+        
+        # 平台碰撞检测
+        self.on_ground = False
+        for platform in platforms:
+            if self.rect.colliderect(platform.rect):
+                if self.velocity_y > 0:  # 下落
+                    self.rect.bottom = platform.rect.top
+                    self.velocity_y = 0
+                    self.on_ground = True
+                elif self.velocity_y < 0:  # 上升
+                    self.rect.top = platform.rect.bottom
+                    self.velocity_y = 0
+        
+        # 屏幕边界
+        if self.rect.left < 0:
+            self.rect.left = 0
+        if self.rect.right > SCREEN_WIDTH:
+            self.rect.right = SCREEN_WIDTH
+        if self.rect.top < 0:
+            self.rect.top = 0
+            self.velocity_y = 0
+        if self.rect.bottom > SCREEN_HEIGHT:
+            self.rect.bottom = SCREEN_HEIGHT
+            self.velocity_y = 0
+            self.on_ground = True
+            
+    def draw(self, surface):
+        # 绘制玩家
+        pygame.draw.rect(surface, self.color, self.rect)
+        
+        # 绘制攻击范围
+        if self.is_attacking:
+            attack_rect = pygame.Rect(self.rect.right, self.rect.centery-20, 30, 40)
+            pygame.draw.rect(surface, RED, attack_rect, 2)
+        
+        # 绘制血条
+        pygame.draw.rect(surface, RED, (self.rect.x, self.rect.y-10, 50, 5))
+        pygame.draw.rect(surface, GREEN, (self.rect.x, self.rect.y-10, 50 * (self.health/100), 5))
+        
+    def get_attack_rect(self):
+        if self.is_attacking:
+            return pygame.Rect(self.rect.right, self.rect.centery-20, 30, 40)
+        return None
+
+# 恐龙类
+class Dinosaur:
+    def __init__(self, x, y):
+        self.rect = pygame.Rect(x, y, 60, 50)
+        self.color = GREEN
+        self.speed = random.randint(2, 4)
+        self.direction = random.choice([-1, 1])
+        self.health = 50
+        self.attack_damage = 10
+        self.attack_cooldown = 0
+        
+    def update(self, platforms, player_rect):
+        # 移动
+        self.rect.x += self.speed * self.direction
+        
+        # 平台边缘检测
+        on_platform = False
+        for platform in platforms:
+            if self.rect.colliderect(platform.rect):
+                on_platform = True
+                # 检查是否在平台边缘
+                future_rect = self.rect.copy()
+                future_rect.x += self.speed * self.direction
+                if not future_rect.colliderect(platform.rect):
+                    self.direction *= -1
+                break
+        
+        # 如果不在平台上，转向
+        if not on_platform and self.rect.bottom > SCREEN_HEIGHT/2:
+            self.direction *= -1
+            
+        # 屏幕边界
+        if self.rect.left < 0 or self.rect.right > SCREEN_WIDTH:
+            self.direction *= -1
+            
+        # 攻击冷却
+        if self.attack_cooldown > 0:
+            self.attack_cooldown -= 1
+            
+    def draw(self, surface):
+        pygame.draw.rect(surface, self.color, self.rect)
+        # 绘制恐龙血条
+        pygame.draw.rect(surface, RED, (self.rect.x, self.rect.y-8, 60, 4))
+        pygame.draw.rect(surface, GREEN, (self.rect.x, self.rect.y-8, 60 * (self.health/50), 4))
+        
+    def take_damage(self, damage):
+        self.health -= damage
+        return self.health <= 0
+
+# 平台类
+class Platform:
+    def __init__(self, x, y, width, height):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.color = BROWN
+        
+    def draw(self, surface):
+        pygame.draw.rect(surface, self.color, self.rect)
+
+# 游戏状态
+class Game:
+    def __init__(self):
+        self.player = Player(100, 300)
+        self.dinosaurs = []
+        self.platforms = []
+        self.game_over = False
+        self.font = pygame.font.Font(None, 36)
+        self.spawn_timer = 0
+        
+        # 创建初始平台
+        self.platforms.append(Platform(0, 500, 800, 20))
+        self.platforms.append(Platform(100, 400, 200, 20))
+        self.platforms.append(Platform(400, 350, 200, 20))
+        self.platforms.append(Platform(200, 250, 200, 20))
+        
+        # 初始恐龙
+        for _ in range(3):
+            self.spawn_dinosaur()
+            
+    def spawn_dinosaur(self):
+        x = random.randint(100, SCREEN_WIDTH-100)
+        y = random.randint(100, 300)
+        self.dinosaurs.append(Dinosaur(x, y))
+        
+    def handle_events(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    pygame.quit()
+                    sys.exit()
+                if self.game_over and event.key == pygame.K_r:
+                    self.__init__()  # 重置游戏
+        
+        keys = pygame.key.get_pressed()
+        self.player.move(keys, self.platforms)
+        
+        # 玩家攻击检测
+        if self.player.is_attacking:
+            attack_rect = self.player.get_attack_rect()
+            if attack_rect:
+                for dino in self.dinosaurs[:]:
+                    if dino.rect.colliderect(attack_rect):
+                        if dino.take_damage(25):
+                            self.player.score += 100
+                            self.dinosaurs.remove(dino)
+        
+        # 恐龙更新和攻击
+        for dino in self.dinosaurs:
+            dino.update(self.platforms, self.player.rect)
+            
+            # 恐龙攻击玩家
+            if dino.rect.colliderect(self.player.rect) and dino.attack_cooldown == 0:
+                self.player.health -= dino.attack_damage
+                dino.attack_cooldown = 30
+                if self.player.health <= 0:
+                    self.game_over = True
+        
+        # 生成新恐龙
+        self.spawn_timer += 1
+        if self.spawn_timer >= 180 and len(self.dinosaurs) < 8:  # 每3秒生成一只，最多8只
+            self.spawn_dinosaur()
+            self.spawn_timer = 0
+            
+    def draw(self, surface):
+        surface.fill(WHITE)
+        
+        # 绘制平台
+        for platform in self.platforms:
+            platform.draw(surface)
+            
+        # 绘制恐龙
+        for dino in self.dinosaurs:
+            dino.draw(surface)
+            
+        # 绘制玩家
+        self.player.draw(surface)
+        
+        # 绘制分数和生命值
+        score_text = self.font.render(f"分数: {self.player.score}", True, BLACK)
+        health_text = self.font.render(f"生命: {self.player.health}", True, BLACK)
+        surface.blit(score_text, (10, 10))
+        surface.blit(health_text, (10, 50))
+        
+        # 操作提示
+        controls_text = self.font.render("方向键移动, 空格攻击, ESC退出, R重玩", True, BLACK)
+        surface.blit(controls_text, (SCREEN_WIDTH//2 - 200, SCREEN_HEIGHT-40))
+        
+        # 游戏结束画面
+        if self.game_over:
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            surface.blit(overlay, (0, 0))
+            
+            game_over_text = self.font.render("游戏结束!", True, RED)
+            score_text = self.font.render(f"最终分数: {self.player.score}", True, WHITE)
+            restart_text = self.font.render("按 R 键重新开始", True, WHITE)
+            
+            surface.blit(game_over_text, (SCREEN_WIDTH//2 - 80, SCREEN_HEIGHT//2 - 60))
+            surface.blit(score_text, (SCREEN_WIDTH//2 - 100, SCREEN_HEIGHT//2))
+            surface.blit(restart_text, (SCREEN_WIDTH//2 - 120, SCREEN_HEIGHT//2 + 60))
+
+# 主游戏循环
+def main():
+    game = Game()
+    FPS = 60
+    
+    try:
+        while True:
+            game.handle_events()
+            game.draw(screen)
+            pygame.display.flip()
+            clock.tick(FPS)
+            
+    except Exception as e:
+        # 异常处理，防止闪退
+        print(f"游戏发生错误: {e}")
+        print("尝试重新启动游戏...")
+        pygame.quit()
+        pygame.init()
+        main()
+
+if __name__ == "__main__":
+    main()
